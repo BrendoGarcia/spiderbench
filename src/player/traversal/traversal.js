@@ -2040,8 +2040,14 @@ export function createTraversal({ world, cam, web, rig, camera }) {
     },
     // progression hook: {releaseBoost: multiplier} (skill 'Slingshot Swing'); null/undefined keys fall back to ctx.params
     setStats(o = {}) { Object.assign(stats, o); },
-    // knocked off the web tightrope (combat engaging / a hit); no-op off the line
+    // knocked off the web tightrope (a combat hit); no-op off the line
     ropeFall() { if (s.mode === 'rope' && s.rope) ropeOff('knock'); },
+    // combat hand-off: a scripted move ends in the air — continue as a normal ballistic fall with this velocity
+    // (momentum kept: flying-kick rebound, air-combo drop), landing handled by traversal
+    toAir(vel) {
+      s.kin = null; s.vel.copy(vel); s.grounded = false; s.airT = 0; s.apexY = feetY(); s.coyote = 0;
+      setMode('air', vel.y > 0.5 ? 'rise' : 'fall');
+    },
     // debug / tests
     forceZip(t) { startZip(t); },
     forceRope(t) { if (s.mode !== 'perch') return false; return ropeTry(t || targeting.best); },

@@ -15,6 +15,7 @@ import { createAudio } from './audio.js';
 import { createFlow } from './flow.js';
 import { createTowers } from './towers.js';
 import { createCollectibles } from './collectibles.js';
+import { createDevMenu } from '../../ui/menus/dev.js';
 import { createCrimes } from './crimes.js';
 import { createTravel } from './travel.js';
 import { createPhoto } from './photo.js';
@@ -61,6 +62,8 @@ export function initSystems(ctx) {
   sys.photo = createPhoto(sys);
   sys.pause = createPauseMenu(sys);
   sys.photoUI = createPhotoUI(sys);
+  // developer menu (~): dev server, or ?dev on a build (registered after the pause menu: its keys win)
+  if (import.meta.env?.DEV || new URLSearchParams(location.search).has('dev')) sys.dev = createDevMenu(sys);
   // user r-symbiote: Classic / Stealth / Negative / Noir were removed; old saves wearing one fall back to Advanced
   if (!SUITS.some(s => s.id === save.state.suit)) { save.state.suit = 'advanced'; save.markDirty(); }
   if (save.state.suitsUnlocked) save.state.suitsUnlocked = save.state.suitsUnlocked.filter(id => SUITS.some(s => s.id === id));

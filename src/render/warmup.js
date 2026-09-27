@@ -38,6 +38,20 @@ export function createWarmup(renderer, scene, camera, { mirrorLayers = null, per
       for (const p of FSPass.all) if (!done.has(p.mesh)) { done.add(p.mesh); queue.push(2, p.mesh); }
     },
     get pending() { return queue.length / 2; },
+    // after flush(): wait (off the main thread's back: polled every 60 ms) until the queued programs have linked, so the
+    // first frame does not stall on them; onProgress(0..1) feeds the loading screen. Resolves on timeout too.
+    settle(onProgress = null, timeoutMs = 25000) {
+      const all = inFlight.slice(), n = all.length, t = performance.now();
+      return new Promise(res => {
+        const poll = () => {
+          let ready = 0; for (const p of all) if (p.isReady?.() ?? true) ready++;
+          onProgress?.(n ? ready / n : 1);
+          if (ready >= n || performance.now() - t > timeoutMs) { console.log(`[warmup] ${ready}/${n} programs linked before the first frame (${((performance.now() - t) / 1000).toFixed(1)} s)`); res(); }
+          else setTimeout(poll, 60);
+        };
+        poll();
+      });
+    },
     // queue everything at once (at load, before the first frame: the links overlap the loading screen's first frame)
     flush() { const ps = perStep, bm = budgetMs; perStep = Infinity; budgetMs = Infinity; inFlight.length = 0; try { api.step(true); } finally { perStep = ps; budgetMs = bm; } },
     step(force = false) {

@@ -1,21 +1,29 @@
-// OWNER: combat engineer. One combat enemy wrapping a crime actor (src/game/systems/crimeactors.js: thug.glb driven by
-// Spider-Man's clips). The combat module sets actor.external = true and owns position / facing / clips from then on.
+// OWNER: combat engineer. One combat enemy wrapping a crime actor (src/game/systems/crimeactors.js): thug.glb with its
+// own brawler clips (thugIdle, thugPunch1/2, thugKick, directional stumbles, thugKnockdown / thugGetUp, gun aim / fire,
+// bruteSlam, thugWebbedStruggle) plus Spider-Man's walk / jog / run for locomotion. Stumbles, knockdown and get-up carry
+// root motion (actor.rootDelta): the body travels with the feet, never slides or snaps back.
+// The combat module sets actor.external = true and owns position / facing / clips from then on.
 // Types: 'melee' (street thug), 'gunman' (pistol, keeps distance, fires bursts), 'brute' (big, super-armoured heavy hitter).
 // States: hold · approach · attack · aim · fire · stagger · air · knock · down · getup · webbed · stuck · out
 import * as THREE from 'three';
 import { makePistol, Cocoon } from './fx.js';
 import { clamp, damp, dampAngle, angWrap, yawTo, hdist, rnd, pick, smooth, UP } from './util.js';
 
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const X = new THREE.Vector3(1, 0, 0);
 const G = 22;
 
 export const TYPES = {
-  melee: { hp: 50, speed: 3.2, reach: 1.35, dmg: 9, windup: 0.42, scale: 1, attacks: ['punch1', 'punch2', 'kick', 'punch3'] },
-  gunman: { hp: 38, speed: 3.0, reach: 1.3, dmg: 6, windup: 0.42, scale: 1, attacks: ['punch2', 'punch1'] },
-  brute: { hp: 150, speed: 2.4, reach: 1.7, dmg: 18, windup: 0.62, scale: 1.24, attacks: ['kick', 'punch3'] },
+  melee: { hp: 50, speed: 3.2, reach: 1.35, dmg: 9, scale: 1, attacks: ['thugPunch1', 'thugPunch2', 'thugKick'] },
+  gunman: { hp: 38, speed: 3.0, reach: 1.3, dmg: 6, scale: 1, attacks: ['thugPunch2', 'thugPunch1'] },
+  brute: { hp: 150, speed: 2.4, reach: 1.7, dmg: 18, scale: 1.24, attacks: ['bruteSlam', 'thugPunch1', 'bruteSlam'] },
 };
-const HIT_T = { punch1: 0.20, punch2: 0.23, punch3: 0.30, kick: 0.30 };
+// contact time (clip s) and telegraph (s from the start of the swing to the contact: the wind-up is slowed to fill it, so
+// the spider-sense lead matches what the body shows). The thug steps in during the wind-up.
+const HIT_T = { thugPunch1: 0.33, thugPunch2: 0.20, thugKick: 0.30, bruteSlam: 0.57 };
+const TELE = { thugPunch1: 0.55, thugPunch2: 0.42, thugKick: 0.5, bruteSlam: 0.85 };
+const STUMBLE = { back: 'thugStumbleBack', left: 'thugStumbleLeft', right: 'thugStumbleRight' };
+const LOCO = { walk: 1.25, jog: 3.2, run: 5.8 };
 
 let seq = 0;
 export class Enemy {
@@ -36,7 +44,8 @@ export class Enemy {
     if (type === 'brute') this.tintBrute();
     if (this.hasGun) { this.gun = makePistol(); combat.ctx.scene.add(this.gun); }
     this.cocoon = new Cocoon(combat.ctx.scene, this.root, combat.fx.cocoonMat);
-    this.play('fightIdle', { fade: 0.25 });
+    this.rd = new THREE.Vector3(); this.loco = null;
+    this.play('thugIdle', { fade: 0.25 });
   }
   tintBrute() {
     const tex = this.c.bruteTex;
@@ -47,10 +56,10 @@ export class Enemy {
   get targetable() { return this.alive && this.state !== 'down' && this.state !== 'getup'; }
   chest(out = new THREE.Vector3()) { return out.copy(this.pos).setY(this.pos.y + 1.25 * this.T.scale + (this.state === 'down' || this.state === 'out' ? -0.95 : 0)); }
   headPos(out = new THREE.Vector3()) { const b = this.bones.head; if (b) return b.getWorldPosition(out); return this.chest(out).setY(out.y + 0.4); }
-  set(state) { this.state = state; this.st = 0; }
+  set(state) { this.state = state; this.st = 0; if (['hold', 'approach', 'attack', 'aim', 'fire'].includes(state)) this.turnRate = 0; }
   play(name, o = {}) {
     const a = this.actor.play(name, { fade: o.fade ?? 0.18, timeScale: o.ts ?? 1, once: o.once });
-    if (a) { this.act = a; this.actName = name; if (o.at != null) a.time = o.at; }
+    if (a) { this.act = a; this.actName = name; if (o.at != null) { a.time = o.at; this.actor.rootSync?.(); } }
     return a;
   }
   // ------------------------------------------------------------------ damage intake
@@ -62,44 +71,75 @@ export class Enemy {
     const armored = this.type === 'brute' && this.stun <= 0 && !['throw', 'finisher', 'slam'].includes(h.kind) && this.state !== 'webbed';
     if (h.stunBrute && this.type === 'brute') this.stun = 3.8;
     this.hp -= h.dmg * (armored ? 0.55 : 1);
-    this.yaw = Math.atan2(-h.dir.x, -h.dir.z); this.root.rotation.y = this.yaw; // face the attacker
+    this.faceYaw = Math.atan2(-h.dir.x, -h.dir.z); // toward the attacker (turned to quickly, never snapped)
+    const rel = angWrap(this.faceYaw - this.yaw); // attacker bearing in his frame (+ = on his left)
     const dead = this.hp <= 0;
     this.actor.hp = dead ? 0 : Math.max(1, Math.ceil(2 * this.hp / this.maxHp)); // mirror onto the crime record
     if (this.state === 'webbed' && h.kind !== 'air') { this.knock(h.dir, 10, 3.4, true); return { knocked: true }; }
     if (armored && !dead) { this.flinch = 1; this.flinchDir = Math.random() < 0.5 ? -1 : 1; this.pushXZ(h.dir, 0.15); return { armored: true }; }
-    if (this.state === 'air' && h.kind !== 'air' && h.kind !== 'slam') { this.juggle = 0; this.vel.set(h.dir.x * 4, Math.min(this.vel.y, 1), h.dir.z * 4); this.flinch = 1; return { air: true }; }
+    if (h.kind === 'slam') { this.vel.set(h.dir.x * 2, -18, h.dir.z * 2); this.set('air'); this.juggle = 0; this.falling = false; return { slam: true }; } // (was unreachable for airborne targets)
+    if (this.state === 'air' && h.kind !== 'air') { this.juggle = 0; this.vel.set(h.dir.x * 4, Math.min(this.vel.y, 1), h.dir.z * 4); this.flinch = 1; return { air: true }; }
     if (this.state === 'air' || h.kind === 'air') { this.airHit(h); if (dead) this.juggle = Math.min(this.juggle, 0.25); return { air: true }; }
     if (h.kind === 'launch') { this.launch(h.dir); return { launched: true }; }
-    if (h.kind === 'slam') { this.vel.set(h.dir.x * 2, -18, h.dir.z * 2); this.set('air'); this.juggle = 0; return { slam: true }; }
     if (h.kind === 'finisher') { this.hp = 0; this.knock(h.dir, 8, 4.5, true); return { knocked: true }; }
     if (dead || h.kind === 'ender' || h.kind === 'strike' || h.kind === 'throw') {
       const f = h.kind === 'throw' ? 8 : h.kind === 'strike' ? 7.5 : dead ? 7 : 6.5;
       this.knock(h.dir, f, h.kind === 'throw' ? 4.5 : 3.8); return { knocked: true };
     }
-    // light hit: stagger + small slide
-    this.set('stagger'); this.stagT = 0.5 + Math.random() * 0.15;
-    this.play('hitReact', { fade: 0.05, once: true, ts: 1.15 });
-    this.flinch = 1; this.flinchDir = Math.random() < 0.5 ? -1 : 1;
-    this.slide = _v.copy(h.dir).multiplyScalar(2.6).clone();
+    // light hit: a directional stumble (root motion carries him 0.26-0.32 m with his feet). From the side he is pushed
+    // away sideways; from the front the punch's side picks the way his head snaps (h.side: +1 = he is hit on his left)
+    let st = 'back';
+    if (Math.abs(rel) > 0.9 && Math.abs(rel) < 2.3) st = rel > 0 ? 'right' : 'left';
+    else if (Math.abs(rel) <= 0.9 && h.side) st = h.side > 0 ? 'right' : 'left';
+    if (st === this.lastStumble && Math.random() < 0.5) st = 'back';
+    this.lastStumble = st;
+    this.set('stagger'); this.turnRate = Math.abs(rel) > 2.3 ? 14 : 5; // hit from behind: spins round to face him
+    const ts = 1.15 + Math.random() * 0.15;
+    this.play(STUMBLE[st], { fade: 0.06, once: true, ts });
+    this.stagT = (st === 'back' ? 0.7 : 0.6) / ts - 0.06;
     this.c.onEnemyInterrupted(this);
     return { stagger: true };
   }
   pushXZ(dir, d) { this.moveXZ(dir.x * d, dir.z * d); }
+  // pulled in by Spider-Man's web: lurches off balance toward `to` (ground point) over dur s, feet leaving the ground
+  // for a moment; stays there (still off balance) until the blow lands, or recovers after a beat
+  yank(to, dur) {
+    if (!this.alive) return;
+    this.set('yanked'); this.yk = { from: this.pos.clone(), to: to.clone(), dur, prev: 0 };
+    this.faceYaw = yawTo(this.pos, to) ; this.turnRate = 16;
+    this.play('thugKnockdown', { fade: 0.06, once: true, ts: 0.3, at: 0.1 }); // chest pulled forward, arms flung
+    this.c.onEnemyInterrupted(this);
+  }
+  // locomotion clip for ground speed sp (m/s), with hysteresis so a speed near a threshold never flips clips each frame;
+  // stride-matched (timeScale = speed / the clip's authored speed)
+  locomote(sp, fade = 0.25) {
+    if (sp < 0.12) { this.loco = null; this.play('thugIdle', { fade: 0.3 }); return; }
+    const cur = this.loco;
+    let clip = sp > 4.6 ? 'run' : sp > 2.0 ? 'jog' : 'walk';
+    if (cur === 'run' && sp > 4.0) clip = 'run'; else if (cur === 'jog' && sp > 1.6 && sp < 5.2) clip = 'jog'; else if (cur === 'walk' && sp < 2.4) clip = 'walk';
+    this.loco = clip;
+    this.play(clip, { ts: clamp(sp / LOCO[clip], 0.55, 1.6), fade });
+  }
+  // apply the playing clip's root motion (stumbles / knockdown / get-up) with wall collision
+  rootMotion() {
+    const d = this.actor.rootDelta?.(this.rd); if (!d) return;
+    if (Math.abs(d.x) + Math.abs(d.z) > 1e-6) this.moveXZ(d.x, d.z);
+  }
   launch(dir) {
-    this.set('air'); this.vel.set(dir.x * 0.4, 10.2, dir.z * 0.4); this.juggle = 1.7;
-    this.play('hitReact', { fade: 0.06, once: true, ts: 0.9 });
+    this.set('air'); this.vel.set(dir.x * 0.4, 10.2, dir.z * 0.4); this.juggle = 1.7; this.turnRate = 16; this.falling = false;
+    this.play('thugKnockdown', { fade: 0.08, once: true, ts: 0.6 }); // thrown up: arches back, arms flung up
     this.c.onEnemyInterrupted(this);
   }
   airHit(h) {
-    this.set('air'); this.juggle = 1.2;
+    this.set('air'); this.juggle = 1.2; this.falling = false;
     this.vel.set(h.dir.x * 0.8, Math.max(this.vel.y, 1.4), h.dir.z * 0.8);
-    this.play('hitReact', { fade: 0.04, once: true, ts: 1.2 });
+    this.play('thugStumbleBack', { fade: 0.05, once: true, ts: 1.3 }); // limp jolt from each air hit
     this.flinch = 1;
   }
   knock(dir, speed, up, webbed = false) {
-    this.set('knock'); this.airborne = true; this.knockWeb = webbed || this.web >= 0.99;
+    this.set('knock'); this.airborne = true; this.knockWeb = webbed || this.web >= 0.99; this.turnRate = 22;
     this.vel.set(dir.x * speed, up, dir.z * speed);
-    this.play('knockdown', { fade: 0.06, once: true, ts: 1.1 });
+    this.play('thugKnockdown', { fade: 0.06, once: true, ts: 1.1 });
     this.c.onEnemyInterrupted(this);
   }
   addWeb(amount, dir) {
@@ -114,9 +154,9 @@ export class Enemy {
     }
     if (this.state === 'down' || this.state === 'out') { this.stickGround(); return; }
     // already cocooned: more webbing tips him over and pins him to the pavement (neutralised)
-    if (this.state === 'webbed' && this.st > 0.15) { this.play('knockdown', { fade: 0.1, once: true, ts: 1.3 }); this.stickGround(); return; }
+    if (this.state === 'webbed' && this.st > 0.15) { this.play('thugKnockdown', { fade: 0.1, once: true, ts: 1.3 }); this.stickGround(); return; }
     if (this.web >= 0.99 && this.state !== 'air' && this.state !== 'knock') {
-      this.set('webbed'); this.webT = 7; this.play('idle', { fade: 0.15, ts: 0.0001 });
+      this.set('webbed'); this.webT = 7; this.play('thugWebbedStruggle', { fade: 0.18 });
       this.c.onEnemyInterrupted(this);
     }
   }
@@ -134,7 +174,7 @@ export class Enemy {
     const gy = this.ground();
     this.root.position.set(point.x + n.x * 0.3, Math.max(point.y - 0.6, gy + 0.9), point.z + n.z * 0.3);
     this.yaw = Math.atan2(n.x, n.z); this.root.rotation.y = this.yaw; this.pitch = 0;
-    if (!this.play('airApex', { fade: 0.1, ts: 0.0001, at: 0.35 })) this.play('hitReact', { fade: 0.08, once: true, ts: 0.0001, at: 0.18 });
+    this.play('thugWebbedStruggle', { fade: 0.12, ts: 0.45 }); // arms webbed to his sides, writhing slowly on the wall
     this.c.fx.splat(_v.set(point.x, this.root.position.y + 1.2 * this.T.scale, point.z), n, { size: 2.6 });
     this.c.fx.splat(_v.set(point.x, this.root.position.y + 0.45, point.z), n, { size: 1.4 });
     this.c.onEnemyOut(this, 'wall');
@@ -168,58 +208,76 @@ export class Enemy {
     const faceP = yawTo(this.pos, P);
     let moving = 0;
     // safety: never stay airborne / sliding forever (stuck on geometry, lost juggle)
-    if ((this.state === 'knock' || this.state === 'air') && this.st > 3.5) { this.pos.y = this.ground(); if (this.actName !== 'knockdown') this.play('knockdown', { fade: 0.1, once: true, at: 0.6 }); this.landDown(); }
+    if ((this.state === 'knock' || this.state === 'air') && this.st > 3.5) { this.pos.y = this.ground(); if (this.actName !== 'thugKnockdown') this.play('thugKnockdown', { fade: 0.1, once: true, at: 0.6 }); this.landDown(); }
+    if (this.faceYaw != null && this.turnRate) { this.yaw = dampAngle(this.yaw, this.faceYaw, this.turnRate, dt); if (Math.abs(angWrap(this.faceYaw - this.yaw)) < 0.02) this.turnRate = 0; }
+    if (['stagger', 'knock', 'down', 'getup'].includes(this.state)) this.rootMotion();
     switch (this.state) {
       case 'hold': {
         const slot = c.slotFor(this);
         const to = _v.set(slot.x - this.pos.x, 0, slot.z - this.pos.z); const L = to.length();
         const far = L > 1.4;
         const sp = far ? (L > 6 ? this.T.speed * 1.5 : this.T.speed * 0.75) : Math.min(0.55, L * 1.5);
-        if (L > 0.15) { to.divideScalar(L); this.moveXZ(to.x * sp * dt, to.z * sp * dt); moving = sp; }
+        // speed eases (no instant start / stop), clip picked from the actual speed
+        const want = L > 0.15 ? sp : 0;
+        this.spd = damp(this.spd || 0, want, want > (this.spd || 0) ? 5 : 8, dt);
+        if (L > 0.15) { to.divideScalar(L); this.moveXZ(to.x * this.spd * dt, to.z * this.spd * dt); moving = this.spd; }
         this.yaw = dampAngle(this.yaw, far ? Math.atan2(to.x, to.z) : faceP, far ? 8 : 6, dt);
-        if (far) { const clip = sp > 4.2 ? 'run' : sp > 2 ? 'jog' : 'walk'; this.play(clip, { ts: sp / ({ run: 5.8, jog: 3.2, walk: 1.25 })[clip], fade: 0.25 }); }
-        else this.play('fightIdle', { fade: 0.3 });
+        this.locomote(this.spd > 0.9 || far ? this.spd : 0);
         break;
       }
-      case 'approach': { // committed melee attack: close the distance, then swing
+      case 'approach': { // committed melee attack: close in, start the swing ~1 m out (he steps in during the wind-up)
         const reach = this.T.reach;
-        if (dist > reach) {
-          const sp = dist > 4 ? 6.2 : 4.2;
+        const sp = dist > 4 ? 6.0 : 4.2;
+        this.spd = damp(this.spd || 0, dist > reach + 0.9 ? sp : 2.2, 6, dt);
+        if (dist > reach + 0.9) {
           const d = _v.set(P.x - this.pos.x, 0, P.z - this.pos.z).normalize();
-          this.moveXZ(d.x * Math.min(sp * dt, dist - reach + 0.05), d.z * Math.min(sp * dt, dist - reach + 0.05)); moving = sp;
-          this.play(sp > 5 ? 'run' : 'jog', { ts: sp / (sp > 5 ? 5.8 : 3.2), fade: 0.2 });
+          this.moveXZ(d.x * this.spd * dt, d.z * this.spd * dt); moving = this.spd;
+          this.locomote(this.spd, 0.2);
         }
         this.yaw = dampAngle(this.yaw, faceP, 12, dt);
-        if (dist <= reach + 0.05 || (this.st > 0.3 && dist < reach + 0.4)) this.startSwing();
+        if (dist <= reach + 1.0 && Math.abs(angWrap(faceP - this.yaw)) < 0.6) this.startSwing();
         else if (this.st > 2.4 || c.spidey.airborne) { this.set('hold'); c.releaseToken(this); }
         break;
       }
       case 'attack': {
-        const a = this.act, hitT = HIT_T[this.atk] ?? 0.25;
-        // telegraph: slow wind-up to hitT-0.12, then snap through the strike
-        if (a) a.timeScale = a.time < hitT - 0.12 ? (hitT - 0.12) / this.T.windup : this.type === 'brute' ? 0.85 : 1.05;
-        if (this.st < 0.25) this.yaw = dampAngle(this.yaw, faceP, 9, dt); // tracks the target during the wind-up, then commits
+        const a = this.act, hitT = HIT_T[this.atk] ?? 0.25, tele = TELE[this.atk] ?? 0.5;
+        // telegraph: the wind-up (to hitT - 0.06) is stretched to fill the telegraph, then he snaps through the strike
+        const k0 = hitT - 0.06;
+        if (a) a.timeScale = a.time < k0 ? k0 / Math.max(0.05, tele - 0.06) : this.type === 'brute' ? 0.9 : 1.05;
+        if (!this.swung) {
+          this.yaw = dampAngle(this.yaw, faceP, this.st < tele * 0.6 ? 10 : 3, dt); // tracks him through the wind-up, then commits
+          // step in: arrive at reach by the contact (a lunge step, not a slide across the street)
+          const left = Math.max(0.06, tele - this.st), gap = dist - this.T.reach * 0.92;
+          if (gap > 0.02) { const st = Math.min(gap, gap / left * dt, 3.6 * dt); const d = _v.set(P.x - this.pos.x, 0, P.z - this.pos.z).normalize(); this.moveXZ(d.x * st, d.z * st); }
+        }
         if (!this.swung && a && a.time >= hitT) { this.swung = true; c.enemyStrike(this); }
-        if (this.swung && a && a.time >= a.getClip().duration - 0.1) { this.set('hold'); this.cd = rnd(1.3, 2.8) * (this.type === 'brute' ? 1.3 : 1); c.releaseToken(this); }
+        if (this.swung && a && a.time >= a.getClip().duration - 0.12) { this.set('hold'); this.play('thugIdle', { fade: 0.25 }); this.cd = rnd(1.3, 2.8) * (this.type === 'brute' ? 1.3 : 1); c.releaseToken(this); }
         break;
       }
       case 'aim': {
         this.yaw = dampAngle(this.yaw, faceP, 10, dt);
         this.aimW = Math.min(1, this.aimW + dt / 0.22);
-        this.play('fightIdle', { fade: 0.2 });
+        if (this.hasGun) this.play('thugGunAim', { fade: 0.22 }); else this.play('thugIdle', { fade: 0.2 });
         if (this.st >= this.aimDur) { this.set('fire'); this.shots = 0; this.nextShot = 0; }
         break;
       }
       case 'fire': {
         this.yaw = dampAngle(this.yaw, faceP, 10, dt);
         this.nextShot -= dt;
-        if (this.nextShot <= 0 && this.shots < 3) { this.shots++; this.nextShot = 0.12; c.enemyShoot(this); }
-        if (this.shots >= 3 && this.st > 0.5) { this.set('hold'); this.cd = rnd(2.6, 4.2); c.releaseToken(this); }
+        if (this.nextShot <= 0 && this.shots < 3) { this.shots++; this.nextShot = 0.26; c.enemyShoot(this); if (this.hasGun) this.play('thugGunFire', { fade: 0.04, once: true, ts: 1.15 }); }
+        if (this.shots >= 3 && this.st > 0.85) { this.set('hold'); this.play('thugIdle', { fade: 0.3 }); this.cd = rnd(2.6, 4.2); c.releaseToken(this); }
+        break;
+      }
+      case 'yanked': {
+        const Y = this.yk, u = clamp(this.st / Y.dur, 0, 1), e = u * u * (3 - 2 * u);
+        const dd = e - Y.prev; Y.prev = e;
+        if (dd > 0) this.moveXZ((Y.to.x - Y.from.x) * dd, (Y.to.z - Y.from.z) * dd);
+        this.pos.y = this.ground() + Math.sin(Math.PI * u) * 0.28;
+        if (this.st > Y.dur + 0.35) { this.set('stagger'); this.stagT = 0.4; this.play('thugStumbleBack', { fade: 0.12, once: true, ts: 1.2 }); } // no blow came
         break;
       }
       case 'stagger': {
-        if (this.slide) { const k = Math.exp(-9 * dt); this.moveXZ(this.slide.x * dt, this.slide.z * dt); this.slide.multiplyScalar(k); }
-        if (this.st > this.stagT) { this.set('hold'); this.play('fightIdle', { fade: 0.25 }); this.cd = Math.max(this.cd, rnd(0.8, 1.6)); }
+        if (this.st > this.stagT) { this.set('hold'); this.play('thugIdle', { fade: 0.25 }); this.cd = Math.max(this.cd, rnd(0.8, 1.6)); }
         break;
       }
       case 'air': {
@@ -232,14 +290,14 @@ export class Enemy {
         this.moveXZ(this.vel.x * dt, this.vel.z * dt); this.pos.y += this.vel.y * dt;
         // lie back in the air while juggled; body rights itself as he falls
         this.pitch = damp(this.pitch, this.juggle > 0 ? -1.15 : -0.6, 6, dt);
-        if (this.juggle <= 0 && this.actName !== 'knockdown' && this.vel.y < -1) this.play('knockdown', { fade: 0.2, once: true, at: 0.3, ts: 1 });
+        if (this.juggle <= 0 && !this.falling && this.vel.y < -1) { this.falling = true; this.play('thugKnockdown', { fade: 0.2, once: true, at: 0.3, ts: 1 }); }
         const gy = this.ground();
         if (this.pos.y <= gy && this.vel.y <= 0) {
           this.pos.y = gy; const sev = clamp(-this.vel.y / 16, 0.2, 1);
           c.fx.dust(this.pos, { amount: 0.5 + sev }); c.shake(0.12 * sev + 0.05); c.sfx('land', 0.4 + sev * 0.5);
           if (this.hp <= 0 && this.slammed !== false) this.hp = Math.min(this.hp, 0);
-          if (this.actName !== 'knockdown') this.play('knockdown', { fade: 0.08, once: true, at: 0.55 });
-          this.landDown();
+          if (this.actName !== 'thugKnockdown' || this.act.time < 0.5) this.play('thugKnockdown', { fade: 0.1, once: true, at: 0.62 });
+          this.falling = false; this.landDown();
         }
         break;
       }
@@ -267,21 +325,21 @@ export class Enemy {
         this.pitch = damp(this.pitch, 0, 8, dt);
         if (this.st > this.downT) {
           if (this.hp <= 0) { this.out = true; this.set('out'); c.onEnemyOut(this, 'ko'); }
-          else { this.set('getup'); this.play('getUp', { fade: 0.15, once: true, ts: 1.05 }); }
+          else { this.set('getup'); this.play('thugGetUp', { fade: 0.15, once: true, ts: 1.1 }); } // rolls to his side, hands + knees, stands
         }
         break;
       }
-      case 'getup': if (this.st > 0.9) { this.set('hold'); this.play('fightIdle', { fade: 0.2 }); this.cd = rnd(0.8, 1.8); } break;
+      case 'getup': if (this.st > 1.4 / 1.1 - 0.12) { this.set('hold'); this.play('thugIdle', { fade: 0.25 }); this.cd = rnd(0.8, 1.8); } break;
       case 'webbed': {
         this.webT -= dt;
-        if (this.webT <= 0) { this.web = 0.3; this.set('hold'); this.play('fightIdle', { fade: 0.3 }); }
+        if (this.webT <= 0) { this.web = 0.3; this.set('hold'); this.play('thugIdle', { fade: 0.3 }); }
         break;
       }
       case 'stuck': case 'out': this.pitch = damp(this.pitch, 0, 8, dt); break;
     }
     if (!['webbed', 'stuck', 'air', 'knock', 'down'].includes(this.state) && this.webT <= 0) this.web = Math.max(0, this.web - dt * 0.05);
     // ground follow when standing
-    if (['hold', 'approach', 'attack', 'aim', 'fire', 'stagger', 'getup', 'webbed', 'down', 'out'].includes(this.state)) {
+    if (['hold', 'approach', 'attack', 'aim', 'fire', 'stagger', 'getup', 'webbed', 'down', 'out'].includes(this.state)) { // (not 'yanked': it sets its own height)
       const gy = this.ground(); this.pos.y = damp(this.pos.y, gy, 20, dt); this.pitch = damp(this.pitch, 0, 8, dt);
       const dyn = this.c.ctx.world.collideDynamic?.(this.pos, 0.34 * this.T.scale, 1.7); // parked / moving cars
       if (dyn?.push && !dyn.grounded) { this.pos.x += dyn.push.x; this.pos.z += dyn.push.z; }
@@ -300,9 +358,10 @@ export class Enemy {
     if (this.web >= 0.95 || this.knockWeb) { this.stickGround(); }
   }
   startSwing() {
-    this.atk = pick(this.T.attacks); this.swung = false;
-    this.set('attack'); this.play(this.atk, { fade: 0.1, once: true, ts: 0.5 });
-    this.c.threat(this, this.T.windup + 0.12, this.type === 'brute' ? 'heavy' : 'melee');
+    let atk = pick(this.T.attacks); if (atk === this.atk && Math.random() < 0.6) atk = pick(this.T.attacks);
+    this.atk = atk; this.swung = false; this.loco = null;
+    this.set('attack'); this.play(this.atk, { fade: 0.12, once: true, ts: 0.5 });
+    this.c.threat(this, TELE[this.atk] ?? 0.5, this.type === 'brute' ? 'heavy' : 'melee');
   }
   // ------------------------------------------------------------------ procedural layer (after the mixer)
   late(dt) {
@@ -317,19 +376,14 @@ export class Enemy {
       const f = smooth(this.flinch);
       B.spine2.quaternion.multiply(_q.setFromAxisAngle(X, -0.35 * f)); if (B.head) B.head.quaternion.multiply(_q.setFromAxisAngle(_v.set(0, 0, 1), 0.3 * f * this.flinchDir));
     }
-    // webbed: struggle inside the cocoon
-    if (this.state === 'webbed' && B.spine1) {
-      const t = this.c.time * 9 + this.id.length;
-      B.spine1.quaternion.multiply(_q.setFromAxisAngle(_v.set(0, 0, 1), Math.sin(t) * 0.12));
-      if (B.head) B.head.quaternion.multiply(_q.setFromAxisAngle(_v.set(0, 1, 0), Math.sin(t * 0.7) * 0.35));
-    }
-    // gunman: aim the right arm at Spider-Man's chest
+    // gunman: the two-handed aim clip points along his facing; pitch the chest toward Spider-Man (on a ledge / in the air)
     const aiming = this.hasGun && (this.state === 'aim' || this.state === 'fire');
     this.aimW = aiming ? this.aimW : Math.max(0, this.aimW - dt * 4);
-    if (this.aimW > 0.01 && B.upperArmR && B.forearmR) {
-      const tgt = this.c.playerChest(_v2);
-      for (const b of [B.upperArmR, B.forearmR]) this.aimBone(b, tgt, smooth(this.aimW));
-      if (B.handR) this.aimBone(B.handR, tgt, smooth(this.aimW) * 0.8);
+    if (this.aimW > 0.01 && B.spine2) {
+      const tgt = this.c.playerChest(_v2), sh = this.chest(_v3);
+      const pitch = clamp(Math.atan2(tgt.y - sh.y, Math.max(1, hdist(tgt, sh))), -0.6, 0.9);
+      this.aimP = damp(this.aimP || 0, pitch, 8, dt);
+      B.spine2.quaternion.multiply(_q.setFromAxisAngle(X, -this.aimP * 0.8 * smooth(this.aimW)));
     }
     // helper bones follow their base bones (SPIDERMAN.md v3 contract)
     if (B.deltoidR && B.upperArmR) B.deltoidR.quaternion.slerpQuaternions(this.rest.deltoidR, B.upperArmR.quaternion, 0.5);
@@ -346,25 +400,13 @@ export class Enemy {
     }
     this.cocoon.update(dt, this.web);
   }
-  aimBone(b, target, w) {
-    b.updateWorldMatrix(true, false);
-    const wp = b.getWorldPosition(_v), wq = b.getWorldQuaternion(_q);
-    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(wq);
-    const want = new THREE.Vector3().subVectors(target, wp).normalize();
-    const dq = new THREE.Quaternion().setFromUnitVectors(axis, want);
-    dq.slerp(new THREE.Quaternion(), 1 - w);
-    const nw = dq.multiply(wq);
-    const pq = b.parent.getWorldQuaternion(_q2).invert();
-    b.quaternion.copy(pq.multiply(nw));
-    b.updateWorldMatrix(false, true);
-  }
   muzzle(out = new THREE.Vector3()) {
     if (this.gun) return out.copy(this.gun.userData.muzzle).applyMatrix4(this.gun.matrixWorld);
     return this.bones.handR ? this.bones.handR.getWorldPosition(out) : this.chest(out);
   }
   release() { // hand the actor back to the crime system (player left the area)
     this.actor.external = false; this.dispose(); if (!this.alive) return;
-    this.actor.play('fightIdle', { fade: 0.3 });
+    this.actor.play('thugIdle', { fade: 0.3 });
   }
   dispose() {
     this.cocoon.dispose();

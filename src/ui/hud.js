@@ -2,6 +2,7 @@
 // objective markers, off-screen objective indicator (left diamond), controls help overlay.
 // createHud({player, world, camera}) -> {update(dt), setVisible(b), setObjective(vec3|null), showHelp(b)}
 import * as THREE from 'three';
+import { loadFonts } from './fonts.js';
 import { createReticle } from './reticle.js';
 
 const COL = { street: '#0a1648', block: '#95b4f5', blockHi: '#b4cbff', water: '#1b4f86', shore: '#5da6e6', park: '#2f63b0', sidewalk: '#16266a', bg: '#0c1c55' };
@@ -10,8 +11,7 @@ const VIEW_M = 260;        // meters visible across the minimap width
 
 function css() {
   if (document.getElementById('hud-css')) return;
-  const l = document.createElement('link'); l.rel = 'stylesheet';
-  l.href = (import.meta.env?.BASE_URL || '/') + 'assets/ui/fonts/fonts.css'; document.head.appendChild(l); // local fonts only (no network)
+  loadFonts();
   const s = document.createElement('style'); s.id = 'hud-css';
   s.textContent = `
   #hud{position:fixed;inset:0;pointer-events:none;font-family:Rajdhani,'Barlow Condensed','Arial Narrow',sans-serif;color:#fff;z-index:10;transition:opacity .4s}

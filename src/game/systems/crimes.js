@@ -42,6 +42,28 @@ export function createCrimes(sys) {
   on('crime:cleared', ({ id } = {}) => { if (active && (active.id === id || id == null)) finish(true); });
   on('fasttravel:start', () => { if (active) { active.suspended = true; active.suspendT = 0; } });
 
+  // (dev menu) a sidewalk spot 28-60 m from p (widening if there is none), preferring the direction `fwd`; `out`
+  // points from the building line to the nearest roadway, like pickSpot's
+  function pickSpotNear(type, p, fwd) {
+    const road = t => t === 'avenue' || t === 'street' || t === 'intersection';
+    const sideOK = (x, z) => { const q = streetsAt(x, z); return q.type === 'sidewalk' && !q.island && onLand(x, z) && ctx.world.groundHeight(x, z, 3) < 1.2; };
+    for (const [r0, r1] of [[28, 60], [55, 120], [110, 240]]) {
+      for (let tries = 0; tries < 120; tries++) {
+        const base = fwd ? Math.atan2(fwd.x, fwd.z) : 0, spread = fwd && tries < 70 ? 1.2 : Math.PI;
+        const a = base + (Math.random() * 2 - 1) * spread, r = r0 + Math.random() * (r1 - r0);
+        const x = p.x + Math.sin(a) * r, z = p.z + Math.cos(a) * r;
+        if (type === 'carChase') { const ax = avenues.reduce((b, v) => (Math.abs(v - x) < Math.abs(b - x) ? v : b), avenues[0]), sz = G.ST_SP * Math.round(z / G.ST_SP); if (streetsAt(ax, sz).type === 'intersection') return { pos: new THREE.Vector3(ax, 0, sz) }; continue; }
+        if (!sideOK(x, z)) continue;
+        let out = null;
+        for (const d of [2, 3.5, 5, 7]) { for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (!out && road(streetsAt(x + dx * d, z + dz * d).type)) out = new THREE.Vector3(dx, 0, dz); if (out) break; }
+        if (!out) continue;
+        const along = new THREE.Vector3(-out.z, 0, out.x);
+        if (![-2, 3.5].every(k => sideOK(x + along.x * k, z + along.z * k))) continue; // room for the scene along the sidewalk
+        return { pos: new THREE.Vector3(x, ctx.world.groundHeight(x, z), z), out };
+      }
+    }
+    return null;
+  }
   function pickSpot(type, p) {
     const rnd = Math.random;
     for (let tries = 0; tries < 60; tries++) {
@@ -82,7 +104,7 @@ export function createCrimes(sys) {
       c.victim = actors.spawn({ pos: V(at(3.2, -1.0)), variant: 'c', role: 'victim' });
       if (c.victim) { c.victim.face(door, true); c.victim.play('jumpCrouch'); }
       c.thugs = [actors.spawn({ pos: V(at(-1.2, 0.2)), variant: 'b', role: 'thug' }), actors.spawn({ pos: V(at(0.9, 0.6)), variant: 'a', role: 'thug' }), actors.spawn({ pos: V(at(-0.2, 1.8)), variant: 'b', role: 'thug' })].filter(Boolean);
-      c.thugs.forEach((t, i) => { t.face(at(i - 1, 8), true); t.play(i === 1 ? 'idleLook' : 'fightIdle'); t.lookout = true; });
+      c.thugs.forEach((t, i) => { t.face(at(i - 1, 8), true); t.play(i === 1 ? 'idleLook' : 'thugIdle'); t.lookout = true; });
     }
     c.enemies = (c.thugs || []).map(a => ({ id: a.id, object: a.root, actor: a }));
   }
@@ -102,17 +124,18 @@ export function createCrimes(sys) {
     }
   }
 
-  function spawn(type) {
+  // opts.near: spawn 28-60 m from the player (dev menu), preferring opts.fwd (the camera's view direction)
+  function spawn(type, opts = {}) {
     if (active) return null;
     const p = ctx.player.position;
     type = type || ['mugging', 'bankAlarm', 'carChase'][Math.floor(Math.random() * 3)];
-    const spot = pickSpot(type, p); if (!spot) return null;
+    const spot = opts.near ? pickSpotNear(type, p, opts.fwd) : pickSpot(type, p); if (!spot) return null;
     const { pos } = spot;
     const T = TYPES[type];
     const c = active = {
       id: 'crime_' + (++seq), type, title: T.title, text: T.text, icon: T.icon, pos, district: data.districtAt(pos.x, pos.z).id,
       state: 'active', claimed: false, t: 0, meter: 0, limit: type === 'carChase' ? 150 : 110, enemies: [], thugs: [], victim: null,
-      suspended: false, hitCd: 0,
+      suspended: false, hitCd: 0, dev: !!opts.dev,
       claim() { this.claimed = true; },
     };
     if (type === 'bankAlarm') audio.loop(c.id, 'alarm', pos.clone().setY(pos.y + 4));
@@ -129,6 +152,21 @@ export function createCrimes(sys) {
     return c;
   }
 
+  // remove the active crime at once, no toast / XP / fail (dev menu toggle): combat drops its fight ('crime:cancelled'),
+  // every actor of the scene is removed
+  function cancel() {
+    const c = active; if (!c) return false;
+    active = null; c.state = 'cancelled';
+    audio.stopLoop(c.id); audio.stopLoop(c.id + '_siren');
+    if (chase) { chase.hide(); chase = null; }
+    ride.pending = ride.on = false;
+    emit('crime:cancelled', c);
+    for (const a of [...(c.thugs || []), c.victim]) if (a?.root?.parent) a.dispose();
+    ui.crime(null); sys.markers.setCrime(null); sys.markers.setCrimeColumn(true);
+    emit('crime:zone', { id: c.id, pos: c.pos.clone(), radius: 15, active: false, type: c.type });
+    next = (70 + Math.random() * 60) / (ctx.params?.crimeRate || 1);
+    return true;
+  }
   function finish(success, reason) {
     const c = active; if (!c) return;
     c.state = success ? 'resolved' : (reason || 'failed'); active = null;
@@ -341,12 +379,12 @@ export function createCrimes(sys) {
       if (th.down || th.external) continue;
       const d = Math.hypot(th.root.position.x - p.x, th.root.position.z - p.z);
       th.cd = (th.cd ?? Math.random() * 1.5) - dt;
-      if (d > 2.2 && d < 40) { if (!th.move || th.move.to.distanceTo(p) > 1.5) { th.runTo(_v.copy(p).setY(0), d > 8 ? 5.8 : 3.2); th.onArrive = () => th.stop('fightIdle'); } }
+      if (d > 2.2 && d < 40) { if (!th.move || th.move.to.distanceTo(p) > 1.5) { th.runTo(_v.copy(p).setY(0), d > 8 ? 5.8 : 3.2); th.onArrive = () => th.stop('thugIdle'); } }
       else if (d <= 2.2) {
-        if (th.move) th.stop('fightIdle');
+        if (th.move) th.stop('thugIdle');
         th.face(p);
         if (th.cd <= 0 && performance.now() - th.lastHit > 700) {
-          th.cd = 1.6 + Math.random() * 1.2; th.play(['punch1', 'punch2', 'kick'][Math.floor(Math.random() * 3)], { fade: 0.1, then: 'fightIdle' });
+          th.cd = 1.6 + Math.random() * 1.2; th.play(['thugPunch1', 'thugPunch2', 'thugKick'][Math.floor(Math.random() * 3)], { fade: 0.1, then: 'thugIdle' });
           setTimeout(() => { if (!th.down && th.root.position.distanceTo(ctx.player.position) < 2.6) { ctx.player.cam?.shake?.(0.12); audio.sfx.land?.(0.15); } }, 260);
         }
       }
@@ -364,7 +402,7 @@ export function createCrimes(sys) {
     get enabled() { return enabled; },
     actors,
     enable(v = true) { enabled = v; if (v && !active) next = Math.min(next, 3); },
-    spawn, finish,
+    spawn, finish, cancel,
     update(dt, p) {
       actors.update(dt);
       for (let i = leftovers.length - 1; i >= 0; i--) { const L = leftovers[i]; if (performance.now() > L.until && L.a.root.position.distanceTo(p) > 25) { L.a.dispose(); leftovers.splice(i, 1); } }
@@ -384,14 +422,14 @@ export function createCrimes(sys) {
       if (c.state === 'active') {
         if (d < TYPES[c.type].engage) {
           c.state = 'engaged';
-          for (const th of c.thugs) { th.lookout = false; th.bully = null; th.face(p); th.play('fightIdle', { fade: 0.2 }); }
+          for (const th of c.thugs) { th.lookout = false; th.bully = null; th.face(p); th.play('thugIdle', { fade: 0.2 }); }
           c.enemies = c.thugs.map(a => ({ id: a.id, object: a.root, actor: a }));
           emit('crime:engage', c); c.engageT = c.t;
           c.meter = 0;
         } else if (c.t > c.limit) { finish(false, 'expired'); return; }
         else {
           // ambient scene: the mugger shoves the victim now and then
-          for (const th of c.thugs) if (th.bully && !th.then && Math.random() < dt * 0.5) { th.play('punch2', { fade: 0.1, then: 'fightIdle' }); setTimeout(() => th.bully?.play('hitReact', { fade: 0.08, then: 'jumpCrouch' }), 230); }
+          for (const th of c.thugs) if (th.bully && !th.then && Math.random() < dt * 0.5) { th.play('thugPunch2', { fade: 0.1, then: 'thugIdle' }); setTimeout(() => th.bully?.play('thugStumbleBack', { fade: 0.08, then: 'jumpCrouch' }), 230); }
         }
       }
       let tracker = { title: c.title, text: `${Math.round(dh)} m`, meter: Math.max(0, 1 - c.t / c.limit), caption: 'CRIME IN PROGRESS' };

@@ -36,7 +36,7 @@ const CSS = `
 #cmb-hud .ebar{position:absolute;left:0;top:0;width:90px;height:6px;margin-left:-45px;background:rgba(0,0,0,.55);box-shadow:0 0 0 1px rgba(255,255,255,.6);transform:skewX(-18deg);opacity:0}
 #cmb-hud .ebar i{position:absolute;inset:0;background:#e3262f;transform-origin:0 50%}
 #cmb-hud .ebar.stun i{background:#f5b82e}
-#cmb-hud .hint{position:absolute;left:50%;bottom:3vh;transform:translateX(-50%);display:flex;gap:16px;font:600 13px/1 var(--sys-body,sans-serif);letter-spacing:.06em;opacity:0;transition:opacity .8s;white-space:nowrap;text-shadow:0 1px 3px #000}
+#cmb-hud .hint{position:absolute;left:50%;bottom:3vh;transform:translateX(-50%);width:max-content;max-width:min(58vw,760px);display:flex;flex-wrap:wrap;justify-content:center;gap:9px 16px;font:600 13px/1 var(--sys-body,sans-serif);letter-spacing:.06em;opacity:0;transition:opacity .8s;white-space:nowrap;text-shadow:0 1px 3px #000}
 #cmb-hud .hint.on{opacity:.92}
 #cmb-hud .hint span{display:flex;align-items:center;gap:6px}
 #cmb-hud .hint kbd{font:800 11px/1 var(--sys-body,sans-serif);border:1.5px solid rgba(255,255,255,.85);border-radius:4px;padding:3px 5px;background:rgba(0,0,0,.4)}
@@ -54,8 +54,8 @@ export function createHud(c) {
     <div class="arrows"></div><div class="ebars"></div>
     <div class="banner">PERFECT DODGE</div><div class="msg"></div>
     <div class="hint">
-      <span><kbd>LMB</kbd>Attack</span><span><kbd>Hold LMB</kbd>Launcher</span><span><kbd>Space</kbd>Dodge (on warning)</span><span><kbd>C</kbd>Dodge</span><span><kbd>E</kbd>Web Strike</span><span><kbd>F</kbd>Web</span>
-      <span><kbd>E</kbd>Web Strike</span><span><kbd>R</kbd>Throw</span><span><kbd>Q</kbd>Finisher</span><span><kbd>Z</kbd>Heal</span></div>`;
+      <span><kbd>LMB</kbd>Attack</span><span><kbd>Hold LMB</kbd>Launch / Slam</span><span><kbd>C</kbd>Dodge</span><span><kbd>Space</kbd>Jump (evades)</span>
+      <span><kbd>E</kbd>Web Strike</span><span><kbd>F</kbd>Web</span><span><kbd>R</kbd>Throw</span><span><kbd>Q</kbd>Finisher</span><span><kbd>Z</kbd>Heal</span></div>`;
   document.body.appendChild(root);
   const $ = s => root.querySelector(s);
   const fill = $('.hp .fill'), trail = $('.hp .trail'), hpBox = $('.hp'), hpn = $('.hpn');

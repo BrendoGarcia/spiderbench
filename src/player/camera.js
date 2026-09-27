@@ -84,7 +84,7 @@ export function createChaseCamera(camera, world) {
         wantYaw = Math.atan2(p.swingDir.x, p.swingDir.z); rate = 2.2;
         wantPitch = clamp(0.1 - vel.y * 0.006, -0.12, 0.3);
       }
-      else if (hs > 2.5 && !(p.sling > 0)) { // (web slingshot: stepping backward never swings the camera round)
+      else if (hs > 2.5 && !(p.sling > 0) && !p.noAuto) { // (web slingshot: stepping backward never swings the camera round; combat lunges: the combat camera frames the fight)
         wantYaw = Math.atan2(vel.x, vel.z);
         rate = clamp((hs - 2) / 10, 0, 1) * (air ? 1.8 : 1.3);
         wantPitch = dive ? 0.62 + 0.5 * smooth(-vel.y, 18, 45) : air ? clamp(0.14 - vel.y * 0.01, -0.1, 0.45) : 0.14; // r10m: fast dive -> ~65 deg down over his back

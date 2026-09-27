@@ -43,7 +43,7 @@ export function drawStickers(g, list, W, H) {
     const id = st.id || st; const item = st.id ? st : newSticker(st);
     g.save(); g.translate(item.x * W, item.y * H); g.rotate(item.r || 0); g.scale(item.s || 1, item.s || 1);
     if (id === 'thwip') {
-      g.font = `900 ${Math.round(110 * u)}px "Spidey Condensed", Impact, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = `900 ${Math.round(110 * u)}px "Spiderbench Condensed", Impact, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.lineJoin = 'round'; g.lineWidth = 16 * u; g.strokeStyle = '#111'; g.strokeText('THWIP!', 0, 0); g.fillStyle = '#fff'; g.fillText('THWIP!', 0, 0);
       g.lineWidth = 5 * u; g.strokeStyle = '#e3262f'; g.strokeText('THWIP!', 6 * u, 6 * u);
     } else if (id === 'emblem') {
@@ -61,7 +61,7 @@ export function drawStickers(g, list, W, H) {
     } else if (id === 'burst') {
       g.beginPath(); for (let i = 0; i < 28; i++) { const a = i / 28 * Math.PI * 2, r = (i % 2 ? 72 : 130) * u; g.lineTo(Math.cos(a) * r * 1.3, Math.sin(a) * r); } g.closePath();
       g.fillStyle = '#ffd61f'; g.fill(); g.lineWidth = 7 * u; g.strokeStyle = '#111'; g.stroke();
-      g.fillStyle = '#e3262f'; g.font = `900 ${Math.round(76 * u)}px "Spidey Condensed", Impact, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('POW!', 0, 4 * u);
+      g.fillStyle = '#e3262f'; g.font = `900 ${Math.round(76 * u)}px "Spiderbench Condensed", Impact, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('POW!', 0, 4 * u);
     } else if (id === 'sig') {
       g.font = `italic 600 ${Math.round(58 * u)}px "Segoe Script", "Brush Script MT", cursive`; g.fillStyle = 'rgba(255,255,255,.92)'; g.shadowColor = 'rgba(0,0,0,.6)'; g.shadowBlur = 6 * u;
       g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('— Spidey', 0, 0);

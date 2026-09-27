@@ -22,6 +22,8 @@ import { BIG_CASTER_LAYER } from './render/csm.js';
 
 const params = new URLSearchParams(location.search);
 const shotName = params.get('shot');
+// loading screen (index.html): stage labels + progress; it fades out once the first frames and the game systems are up
+const boot = window.__boot || { stage: async () => {}, sub() {}, done() {} };
 
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false, reversedDepthBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
@@ -50,7 +52,9 @@ const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 15
 const lighting = createLighting({ renderer, scene });
 const world = await buildCity({ scene, renderer });
 const input = createInput(renderer.domElement);
+await boot.stage('player');
 const player = await createPlayer({ scene, world, camera, input, renderer });
+await boot.stage('shaders');
 const hud = createHud({ player, world, camera });
 const pipeline = createPipeline({ renderer, scene, camera, lighting });
 
@@ -69,10 +73,14 @@ window.__ctx = ctx;
 const warmup = !shotName && !params.has('nowarm') ? createWarmup(renderer, scene, camera, { mirrorLayers: [REFL_LAYER, BIG_CASTER_LAYER] }) : null;
 // first the state the first frame would set that is part of the program keys: the sky IBL (scene.environment, from the
 // first lighting update) and the pipeline's NO_SSR material defines
-if (warmup) { lighting.update(camera); pipeline.prepareMaterials?.(); warmup.rescan(); warmup.flush(); }
-if (!shotName) import('./game/systems/index.js').then(m => m.initSystems(ctx)).catch(e => console.error('[systems] init failed', e)) // open-world systems (C5)
+if (warmup) { lighting.update(camera); pipeline.prepareMaterials?.(); warmup.rescan(); warmup.flush(); await warmup.settle(k => boot.sub(k)); }
+await boot.stage('frame');
+let framesDrawn = 0;
+const systemsReady = shotName ? Promise.resolve() : import('./game/systems/index.js').then(m => m.initSystems(ctx)).catch(e => console.error('[systems] init failed', e)) // open-world systems (C5)
   .then(() => import('./game/combat/index.js')).then(m => m.initCombat(ctx)).catch(e => console.error('[combat] init failed', e)) // combat (C5)
   .then(() => warmup?.rescan()); // (perf r3) + the meshes the systems / combat added (trickled by warmup.step)
+// the loading screen goes once the game systems (HUD, save position) are in and a few frames have been drawn
+systemsReady.then(async () => { boot.sub(0.8); while (framesDrawn < 4) await new Promise(r => requestAnimationFrame(r)); boot.done(); });
 ctx.timeScale = 1; // global game-time scale (combat hit-stop / slow-mo); ctx.realDt = unscaled frame time
 
 if (shotName) {
@@ -91,12 +99,20 @@ if (shotName) {
   window.__shotReady = true;
 } else {
   const clock = new THREE.Clock();
-  renderer.setAnimationLoop(() => {
-    ctx.realDt = Math.min(clock.getDelta(), 1 / 20);
+  function frame(realDt) {
+    ctx.realDt = realDt;
     const dt = ctx.realDt * (ctx.timeScale ?? 1);
     player.update(dt); world.update(dt, camera); lighting.update(camera); hud.update(dt);
     for (const s of ctx.systems) s.update?.(dt);
     pipeline.render(dt);
     warmup?.step(); // (perf r3)
+    if (++framesDrawn === 1) boot.sub(0.4); // the first frame (remaining uploads / links) is in
+  }
+  // tools (tools/film.mjs): ctx.manualStep = true pauses the real-time loop; ctx.stepFrame(dt) then advances exactly one
+  // frame of dt seconds (deterministic frame-by-frame captures of fast motion)
+  ctx.stepFrame = dt => frame(dt);
+  renderer.setAnimationLoop(() => {
+    const d = Math.min(clock.getDelta(), 1 / 20);
+    if (!ctx.manualStep) frame(d);
   });
 }

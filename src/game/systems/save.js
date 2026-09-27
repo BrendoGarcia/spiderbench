@@ -1,7 +1,8 @@
 // OWNER: systems engineer. Persistent progress (localStorage). One JSON blob, debounced writes.
 // In automated runs (?playtest=1 / ?shot=) the save is in-memory only (fresh every run) unless ?save=1,
 // so scenarios stay deterministic and never clobber a player's real save. ?newgame wipes the stored save.
-const KEY = 'spidey.save.v1';
+const KEY = 'spiderbench.save.v1';
+const OLD_KEYS = ['spidey.save.v1']; // saves from before the project was renamed (Spidey -> Spiderbench) are carried over once
 
 export const DEFAULT_SETTINGS = {
   quality: 'high', renderScale: 1, mouseSensitivity: 1, invertY: false,
@@ -29,6 +30,7 @@ export function createSave() {
   if (q.has('newgame')) { try { localStorage.removeItem(KEY); } catch {} }
   if (persistent) {
     try {
+      if (localStorage.getItem(KEY) == null) for (const k of OLD_KEYS) { const o = localStorage.getItem(k); if (o != null) { localStorage.setItem(KEY, o); localStorage.removeItem(k); break; } }
       const raw = localStorage.getItem(KEY);
       if (raw) {
         const s = JSON.parse(raw);

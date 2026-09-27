@@ -4,13 +4,8 @@ import * as THREE from 'three';
 import '../systems.css';
 import { icon, badge } from './icons.js';
 
-export function loadFonts() {
-  if (document.getElementById('sys-fonts')) return;
-  // local font files only (public/assets/ui/fonts): the game never fetches anything from the internet
-  const l = document.createElement('link'); l.id = 'sys-fonts'; l.rel = 'stylesheet';
-  l.href = (import.meta.env?.BASE_URL || '/') + 'assets/ui/fonts/fonts.css';
-  document.head.appendChild(l);
-}
+import { loadFonts } from '../fonts.js';
+export { loadFonts };
 
 export function createUI({ camera, audio }) {
   loadFonts();

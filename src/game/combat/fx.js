@@ -260,14 +260,14 @@ export function createFx(ctx) {
     hit(pos, dir, { heavy = 0, color = [6, 4.2, 2.2] } = {}) {
       const s = 1 + heavy;
       add.emit({ pos, life: 0.07 + 0.04 * heavy, size: 0.28 * s, size1: 0.5 * s, color: [7, 5.5, 4], alpha: 0.8, tile: 0 });
-      add.emit({ pos, dir: _v.set(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)), life: 0.1 + 0.06 * heavy, size: 0.55 * s, size1: 0.95 * s, color, tile: 1 });
+      add.emit({ pos, dir: _v.set(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)), life: 0.08 + 0.04 * heavy, size: 0.4 * s, size1: 0.7 * s, color, tile: 1 });
       const n = 10 + Math.round(heavy * 14);
       for (let i = 0; i < n; i++) {
         const v = _v2.set(rnd(-1, 1), rnd(-0.6, 1), rnd(-1, 1)).normalize().addScaledVector(dir, 1.1).normalize().multiplyScalar(rnd(5, 13) * (0.8 + heavy * 0.5));
         add.emit({ pos, vel: v, life: rnd(0.12, 0.28), size: rnd(0.018, 0.035), size1: 0.01, stretch: 7, color: [7, 4.5, 2], tile: 0, drag: 5, grav: 9 });
       }
       if (heavy > 0.3) {
-        const ring = add.emit({ pos, dir: _v.set(1, 0, 0), life: 0.18, size: 0.25, size1: 1.3 * s, color: [2.2, 2, 1.8], alpha: 0.55, tile: 2 });
+        const ring = add.emit({ pos, dir: _v.set(1, 0, 0), life: 0.13, size: 0.2, size1: 0.75 * s, color: [2.2, 2, 1.8], alpha: 0.38, tile: 2 });
         ring.dir = null;
         for (let i = 0; i < 5; i++) alpha.emit({ pos: _v.copy(pos).add(_v2.set(rnd(-0.2, 0.2), rnd(-0.2, 0.2), rnd(-0.2, 0.2))), vel: _v3.copy(dir).multiplyScalar(rnd(1, 3)).add(_v2.set(rnd(-1, 1), rnd(0, 1), rnd(-1, 1))), life: rnd(0.4, 0.7), size: 0.35, size1: 1.1, color: [0.75, 0.72, 0.7], alpha: 0.35, tile: 3, drag: 3 });
       }

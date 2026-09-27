@@ -74,7 +74,7 @@ export function initCombat(ctx) {
       if (e.state === 'air' && e.pos.y - from.y > 1.2 && !me.airborne) continue; // juggled enemies are only reachable from the air
       const to = _v2.set(e.pos.x - from.x, 0, e.pos.z - from.z).normalize();
       const ang = Math.acos(clamp(to.dot(want), -1, 1));
-      if (needView && ang > 1.25) continue;
+      if (needView && ang > (needView === true ? 1.25 : needView)) continue; // needView: true = 72 deg cone, or the half-angle (rad)
       let sc = d * 0.6 + ang * 3.2;
       if (e === me.target) sc -= 1.2;
       if (e.state === 'attack' || e.state === 'approach') sc -= 0.4;
@@ -120,29 +120,39 @@ export function initCombat(ctx) {
   };
 
   // ------------------------------------------------------------------ hits dealt by Spider-Man
+  // melee blows only connect in reach: Spider-Man's body within h.reach (default 1.9 m, brutes +0.3) of the enemy, both
+  // horizontally and in height. A blow that would land from further away (the target was knocked / stepped away, or the
+  // move could not close the gap) whiffs instead of hitting through the air.
+  const MELEE = new Set(['light', 'ender', 'launch', 'strike', 'air', 'slam', 'finisher']);
   c.playerHit = (e, h) => {
     if (!e || !e.alive) return;
+    if (MELEE.has(h.kind) && !h.from) {
+      const lim = (h.reach ?? 1.9) + (e.type === 'brute' ? 0.3 : 0), dy = (P.position.y - H) - e.pos.y;
+      if (hdist(P.position, e.pos) > lim || dy > 2.4 || dy < -1.2) { c.sfx('whoosh', 8); return; }
+    }
     const from = h.from || P.position;
     const dir = _v.set(e.pos.x - from.x, 0, e.pos.z - from.z); if (dir.lengthSq() < 1e-4) dir.set(Math.sin(P.state.facing), 0, Math.cos(P.state.facing)); dir.normalize();
-    const r = e.hit({ dmg: h.dmg, dir: dir.clone(), kind: h.kind, stunBrute: h.stunBrute });
+    const r = e.hit({ dmg: h.dmg, dir: dir.clone(), kind: h.kind, stunBrute: h.stunBrute, side: h.side || 0 });
     if (!r) return;
     const heavy = r.armored ? 0.1 : h.heavy || 0;
     const cp = e.chest(_v2).addScaledVector(dir, -0.28); if (h.kind === 'air' || h.kind === 'slam' || e.state === 'air') cp.y = e.pos.y + 1.0;
     if (!h.silent) {
       c.fx.hit(cp, _v3.copy(dir).negate(), { heavy, color: r.armored ? [3, 3, 3.4] : undefined });
-      c.hitStop(h.kind === 'finisher' ? 0.16 : heavy > 0.5 ? 0.095 : 0.055);
-      c.shake(0.07 + heavy * 0.28);
+      // impact: light hits dip time for 2 frames (0.15x, not a freeze), heavy ones hold ~4 frames; a full stop on every
+      // jab read as stutter
+      if (h.kind === 'finisher') c.hitStop(0.12, 0.05); else if (heavy > 0.5) c.hitStop(0.065, 0.08); else c.hitStop(0.035, 0.15);
+      c.shake(0.05 + heavy * 0.25);
       if (heavy > 0.5) P.cam?.impact?.(0.12 + heavy * 0.15);
       c.sfx('hit', heavy);
       if (!r.armored) { c.combo.n++; c.combo.t = 0; }
-      if (heavy > 0.5) { c.camPunch = 1; c.camPunchDir = dir.clone(); c.fx.smear(cp, dir, heavy); }
+      if (heavy > 0.5) { c.camPunchT = 0; c.camPunchDir = dir.clone(); c.fx.smear(cp, dir, heavy); }
       const mult = 1 + Math.min(1, c.combo.n / 15);
       me.focus = Math.min(3, me.focus + (heavy > 0.5 ? 0.14 : 0.075) * mult);
     }
   };
   c.groundPound = p => {
     c.fx.dust(p, { amount: 1.4 }); c.shake(0.35); P.cam?.impact?.(0.35); c.sfx('slam');
-    for (const e of c.enemies) if (e.alive && e.state !== 'air' && hdist(e.pos, p) < 2.8) c.playerHit(e, { kind: 'ender', dmg: 8, heavy: 0.4, silent: true });
+    for (const e of c.enemies) if (e.alive && e.state !== 'air' && hdist(e.pos, p) < 2.8) c.playerHit(e, { kind: 'ender', dmg: 8, heavy: 0.4, reach: 3.2, silent: true });
   };
   c.heal = n => {
     me.hp = Math.min(me.maxHp, me.hp + n);
@@ -178,7 +188,7 @@ export function initCombat(ctx) {
     const dmg = e.T.dmg * (heavy && e.type !== 'brute' ? 1.3 : 1);
     me.takeHit(e, dmg, heavy);
     c.fx.hit(_v.copy(P.position).setY(P.position.y + 0.5), _v2.set(pf.x - e.pos.x, 0, pf.z - e.pos.z).normalize(), { heavy: heavy ? 0.6 : 0.2, color: [5, 2, 1.5] });
-    c.hitStop(heavy ? 0.1 : 0.06); c.shake(heavy ? 0.4 : 0.22); if (heavy) P.cam?.impact?.(0.3);
+    c.hitStop(heavy ? 0.08 : 0.045, heavy ? 0.06 : 0.12); c.shake(heavy ? 0.4 : 0.22); if (heavy) P.cam?.impact?.(0.3);
     c.hud.hurt(heavy ? 0.4 : 0.1); c.combo.n = 0; c.sfx('hurt', heavy);
   };
   c.enemyShoot = e => {
@@ -292,6 +302,8 @@ export function initCombat(ctx) {
   // just don't emit a second clear for it
   on('crime:resolved', cr => { if (c.fight?.crime === cr) c.fight.crime = null; });
   on('crime:expired', cr => { if (c.fight?.crime === cr) endFight(false); });
+  // dev menu: the crime was removed outright -> drop the fight and every combat-spawned body / prop at once
+  on('crime:cancelled', cr => { if (c.fight?.crime === cr) { endFight(false); disposeLeftovers(); c.hud.show(false); } });
 
   // ------------------------------------------------------------------ director: slots, tokens, attacks
   const slots = new Map();
@@ -373,51 +385,73 @@ export function initCombat(ctx) {
   }
 
   // ------------------------------------------------------------------ combat camera layer (post chase-camera)
-  const camTmp = { pos: new THREE.Vector3(), q: new THREE.Quaternion() };
+  // Only while he fights on (or next to) the ground with enemies close: traversal around / above the fight keeps the
+  // plain chase camera. Pulls back and lifts with the spread of the fight so the threats around him stay in frame,
+  // shifts sideways toward the crowd (smoothed: no per-frame re-centring jitter), punches in on heavy hits, keeps the
+  // lens out of walls / cars / bodies. The player owns the orbit; when they leave the mouse alone for a moment and an
+  // attacker is winding up off-screen, the yaw drifts gently to bring him in.
   const camPivot = new THREE.Vector3(), camProbe = new THREE.Vector3(), camWant = new THREE.Vector3(), camDir = new THREE.Vector3();
-  const _cq = new THREE.Quaternion(), _cr = new THREE.Vector3(), _cu = new THREE.Vector3(), _cf = new THREE.Vector3(), _cm = new THREE.Matrix4();
+  const camFrame = new THREE.Vector3();
+  const _cr = new THREE.Vector3(), _cu = new THREE.Vector3(), _cf = new THREE.Vector3();
   function combatCamera(realDt) {
     const cam = ctx.camera;
-    const want = c.fight && c.engaged ? 1 : 0;
-    c.camW = damp(c.camW, want, want ? 2.2 : 1.4, realDt);
-    const w = smooth(c.camW);
     const pc = P.position;
-    c.camPunch = Math.max(0, (c.camPunch || 0) - realDt * 5);
+    let nearD = Infinity, spread = 0, n = 0; const cen = camProbe.set(0, 0, 0);
+    for (const e of c.enemies) {
+      if (!e.alive) continue; const d = hdist(e.pos, pc); nearD = Math.min(nearD, d); if (d > 12) continue;
+      const k = e.type === 'gunman' ? 0.5 : 1; n += k; cen.x += e.pos.x * k; cen.z += e.pos.z * k; spread = Math.max(spread, d * (e.type === 'gunman' ? 0.7 : 1));
+    }
+    const grounded = P.mode === 'ground' || me.busy();
+    const want = c.fight && c.engaged && grounded && nearD < 14 ? 1 : 0;
+    c.camW = damp(c.camW, want, want ? 2.0 : 1.3, realDt);
+    const w = smooth(c.camW);
+    // heavy-hit push-in envelope: eases in over 0.15 s, out over 0.45 s (it used to start at full strength: a 0.5 m cut)
+    c.camPunchT = (c.camPunchT ?? 9) + realDt;
+    c.camPunch = c.camPunchT < 0.15 ? smooth(c.camPunchT / 0.15) : 1 - smooth((c.camPunchT - 0.15) / 0.45);
     if (w > 0.002) {
-      let spread = 0, n = 2, cx = pc.x * 2, cz = pc.z * 2;
-      for (const e of c.enemies) {
-        if (!e.alive) continue; const d = hdist(e.pos, pc); if (d > 11) continue;
-        const k = e.type === 'gunman' ? 0.4 : 1; n += k; cx += e.pos.x * k; cz += e.pos.z * k; spread = Math.max(spread, d);
-      }
       const air = me.airborne || P.mode === 'air';
       const fwd = cam.getWorldDirection(_cf);
       _cr.set(1, 0, 0).applyQuaternion(cam.quaternion); _cu.set(0, 1, 0).applyQuaternion(cam.quaternion);
-      // ground: slightly closer than the chase cam, widening only when the crowd spreads out
-      const extra = (clamp(-0.55 + spread * 0.14, -0.55, 0.9) + (air ? 0.5 : 0)) * w;
-      const wantP = camWant.copy(cam.position).addScaledVector(fwd, -extra); wantP.y += 0.25 * w;
+      // distance: pulled back with the spread of the fight, smoothed; an air juggle pulls back and lifts further so the
+      // juggled enemy is in frame beside him, not hidden above his head
+      const juggle = ['air', 'airStrike', 'slamDown'].includes(me.moveName()) || me.moveName() === 'launch' && me.M.rise;
+      c.camAir = damp(c.camAir || 0, juggle ? 1 : air ? 0.4 : 0, juggle ? 3 : 1.5, realDt);
+      const wantExtra = clamp(0.35 + (spread - 3) * 0.16, 0.2, 1.5) + c.camAir * 1.1;
+      c.camExtra = damp(c.camExtra ?? wantExtra, wantExtra, 1.6, realDt);
+      const wantP = camWant.copy(cam.position).addScaledVector(fwd, -c.camExtra * w); wantP.y += (0.3 + c.camAir * 0.9) * w;
+      if (c.camAir > 0.01 && me.target) { // step round toward the enemy's side: parallax opens the pair up side by side
+        const tp = me.target.pos; const lat = (tp.x - pc.x) * _cr.x + (tp.z - pc.z) * _cr.z;
+        c.camSide = damp(c.camSide || 0, lat >= 0 ? 1 : -1, 2, realDt);
+        wantP.addScaledVector(_cr, c.camSide * 1.0 * c.camAir * w);
+      }
       // heavy hit: short push-in toward the impact
-      if (c.camPunch > 0) wantP.addScaledVector(fwd, 0.55 * smooth(c.camPunch) * w);
-      // screen-space framing: keep Spidey (and, on the ground, the fight centroid) near a target point of the frame
-      const tanY = Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2), tanX = tanY * cam.aspect;
-      const subj = camProbe.copy(pc); subj.y += 0.1;
-      if (!air) { subj.x = lerp(subj.x, cx / n, 0.3); subj.z = lerp(subj.z, cz / n, 0.3); }
-      const rel = _v.subVectors(subj, wantP), depth = Math.max(1.5, rel.dot(fwd));
-      const sx = rel.dot(_cr), sy = rel.dot(_cu);
-      const tx = 0.0 * tanX * depth, ty = -0.12 * tanY * depth; // slightly below centre (HUD lives at the top)
-      const k = (air || me.moveName() === 'down' ? 0.85 : 0.55) * w;
-      wantP.addScaledVector(_cr, (sx - tx) * k).addScaledVector(_cu, (sy - ty) * k);
+      if (c.camPunch > 0) wantP.addScaledVector(fwd, 0.25 * c.camPunch * w);
+      // sideways toward the crowd (world-space offset, spring-smoothed, lateral only)
+      const off = n ? _v.set(cen.x / n - pc.x, 0, cen.z / n - pc.z).multiplyScalar(0.22) : _v.set(0, 0, 0);
+      if (off.length() > 1.6) off.setLength(1.6);
+      camFrame.x = damp(camFrame.x, off.x, 2.2, realDt); camFrame.z = damp(camFrame.z, off.z, 2.2, realDt);
+      wantP.addScaledVector(_cr, camFrame.dot(_cr) * w);
       // world collision from the body
       const pivot = camPivot.copy(pc); pivot.y += 0.5;
       const toCam = camDir.subVectors(wantP, pivot); const Lc = toCam.length(); toCam.normalize();
-      let allow = Lc;
-      const h = ctx.world.raycast(pivot, toCam, Lc + 0.3); if (h) allow = Math.max(0.6, h.distance - 0.35);
-      // cars (dynamic, not in world.raycast)
-      for (let t = 0.8; t < allow; t += 0.4) {
+      // HARD occluders (walls, poles, cars): raw clearance along the lens ray (buffered below: the lens eases in toward
+      // 0.6 m short of the obstacle and is only clamped at 0.12 m short of it, so a car / pole crossing the ray is not
+      // a 1-2 m cut)
+      let raw = Lc + 0.6;
+      const h = ctx.world.raycast(pivot, toCam, Lc + 0.9); if (h) raw = Math.min(raw, h.distance);
+      for (let t = 0.8; t < raw; t += 0.35) { // cars (dynamic, not in world.raycast)
         const q = _v2.copy(pivot).addScaledVector(toCam, t);
         const dyn = ctx.world.collideDynamic?.(_v4.set(q.x, q.y - 0.9, q.z), 0.35, 1.2);
-        if (dyn && dyn.push && dyn.push.lengthSq() > 1e-4) { allow = Math.max(0.9, t - 0.4); break; }
+        if (dyn && dyn.push && dyn.push.lengthSq() > 1e-4) { raw = Math.min(raw, t); break; }
       }
-      // enemies (incl. big brutes, cocoons and pinned bodies) between lens and Spidey
+      const limH = Math.max(0.6, raw - 0.12), tgtH = Math.max(0.6, raw - 0.6);
+      c.camHard = Math.min(limH, damp(c.camHard ?? tgtH, tgtH, tgtH < (c.camHard ?? tgtH) ? 12 : 2.5, realDt));
+      let allow = Math.min(Lc, c.camHard);
+      // SOFT occluders (bodies, street-tree trunks): the lens may sit in them for a moment, so it eases in (~0.25 s)
+      // instead of cutting 2-3 m closer in one frame; walls / cars above stay instant (never inside geometry)
+      const hard = allow;
+      // enemies (incl. big brutes, cocoons and pinned bodies) between lens and Spidey: pull in only as far as a normal
+      // over-the-shoulder distance (never into his head: a thug stepping behind him must not become a first-person view)
       for (const e of c.enemies) {
         if (e.stuck === 'wall' || e.state === 'out') continue;
         const r = 0.5 * e.T.scale + (e.web > 0.3 ? 0.25 : 0);
@@ -425,13 +459,55 @@ export function initCombat(ctx) {
           const ep = _v2.copy(e.pos).setY(e.pos.y + hgt * e.T.scale);
           const t = _v4.subVectors(ep, pivot).dot(toCam); if (t < 0.5 || t > allow + 0.4) continue;
           const d = ep.distanceTo(_v4.copy(pivot).addScaledVector(toCam, t));
-          if (d < r + 0.25) allow = Math.max(0.9, Math.min(allow, t - r - 0.2));
+          if (d < r + 0.25) allow = Math.max(2.4, Math.min(allow, t - r - 0.2));
         }
       }
-      c.camAllow = allow < (c.camAllow ?? Lc) ? allow : damp(c.camAllow ?? Lc, allow, 2.5, realDt);
+      // street-tree trunks (walk-blocking only, invisible to the world raycast): never park the lens behind one
+      const trees = P.cam?.foliage?.(pivot);
+      if (trees && trees.length) {
+        for (let t = 0.7; t < allow; t += 0.3) {
+          const q = _v2.copy(pivot).addScaledVector(toCam, t); let hit = false;
+          for (const tr of trees) if (q.y < tr.cy && (q.x - tr.pos.x) ** 2 + (q.z - tr.pos.z) ** 2 < 0.36) { hit = true; break; }
+          if (hit) { allow = Math.max(1.6, t - 0.45); break; }
+        }
+      }
+      c.camSoft = damp(c.camSoft ?? Lc, allow, allow < (c.camSoft ?? Lc) ? 9 : 2.5, realDt);
+      c.camAllow = Math.min(hard, c.camSoft);
+      c.camDbg = [+Lc.toFixed(2), +raw.toFixed(2), +hard.toFixed(2), +c.camAllow.toFixed(2)];
       if (c.camAllow < Lc) { wantP.copy(pivot).addScaledVector(toCam, c.camAllow); wantP.y += (Lc - c.camAllow) * 0.3; }
       const gy = ctx.world.groundHeight(wantP.x, wantP.z, wantP.y + 0.3) + 0.35; if (wantP.y < gy) wantP.y = gy;
       cam.position.copy(wantP);
+      const pc2 = P.cam;
+      // pitch: an occlusion dodge (building / tree beside him) can leave the orbit near top-down, and standing and
+      // fighting never brings it back. Mouse idle and no occlusion goal -> ease back toward a fight angle (~14 deg down)
+      // as far as that angle has room behind him (never back into the wall that raised it)
+      if (pc2 && pc2.lastLook > 1.0 && !pc2.occGoal && (pc2.occHold || 0) <= 0 && pc2.pitch > 0.3) {
+        const tp = clamp(pc2.pitch - 0.25, 0.24, pc2.pitch), cp = Math.cos(tp);
+        const d = _v2.set(-Math.sin(pc2.yaw) * cp, Math.sin(tp), -Math.cos(pc2.yaw) * cp), o = _v4.copy(pc).setY(pc.y + 0.55);
+        const hh = ctx.world.raycast(o, d, 4.2);
+        if (!hh || hh.distance > 3.4) pc2.pitch = damp(pc2.pitch, tp, 1.4 * w, realDt);
+      }
+      // 3/4 framing: while he fights on the ground and the current target stands (nearly) straight ahead of him along the
+      // view, his body hides the thug and the blows. With the mouse idle for 0.6 s the orbit drifts round (<= 1.3 rad/s)
+      // until Spider-Man -> target is ~45 deg off the view axis, on the side it already is.
+      const tg = me.target?.alive ? me.target : null;
+      if (pc2 && tg && pc2.lastLook > 0.6 && !c.cineS && c.time - me.lastAttackT < 2.5 && !juggle) {
+        const yawST = Math.atan2(tg.pos.x - pc.x, tg.pos.z - pc.z), dA = angWrap(yawST - pc2.yaw);
+        if (Math.abs(dA) < 0.72 && hdist(tg.pos, pc) > 0.6) {
+          const goal = yawST - (dA >= 0 ? 1 : -1) * 0.8, step = angWrap(goal - pc2.yaw);
+          pc2.yaw += clamp(step, -1.3 * realDt * w, 1.3 * realDt * w);
+        }
+      }
+      // yaw assist: an attacker winding up outside the view (mouse idle for 1.2 s) -> drift the orbit toward him
+      if (pc2 && pc2.lastLook > 1.2 && !c.cineS) {
+        let tgt = null, best = Infinity;
+        for (const t of c.threats) { const r = t.at - c.time; if (r > 0 && r < best) { best = r; tgt = t.e; } }
+        if (tgt) {
+          const rel = angWrap(Math.atan2(tgt.pos.x - pc.x, tgt.pos.z - pc.z) - pc2.yaw);
+          const over = Math.abs(rel) - 0.62; // beyond ~35 deg off the view axis
+          if (over > 0) pc2.yaw += Math.sign(rel) * Math.min(over, 1.4 * realDt * w);
+        }
+      }
     }
     // cinematic beats (finisher / wall pin): low side angle that frames BOTH actors every frame
     const S = c.cineS;
@@ -524,6 +600,7 @@ export function initCombat(ctx) {
           const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, d = Math.hypot(dx, dz), m = 0.85 * Math.max(a.T.scale, b.T.scale);
           if (d < m && d > 1e-4) { const k = (m - d) * 0.5 / d; a.moveXZ(-dx * k, -dz * k); b.moveXZ(dx * k, dz * k); }
         }
+        c.props.collide(a.pos, 0.3 * a.T.scale, (x, z) => a.moveXZ(x, z)); // throwable props are solid
         const pf = c.playerFeet, dx = a.pos.x - pf.x, dz = a.pos.z - pf.z, d = Math.hypot(dx, dz), m = 0.8 * a.T.scale;
         if (d < m && d > 1e-4 && Math.abs(a.pos.y - pf.y) < 1) a.moveXZ(dx / d * (m - d), dz / d * (m - d));
       }
@@ -547,7 +624,7 @@ export function initCombat(ctx) {
         if (k > lvl) { lvl = k; red = t.kind === 'gun' ? 1 : 0; }
         if (!t.hinted && r < 0.5 && r > 0.2) {
           t.hinted = true;
-          if (c.warnCount < 4 && me.isFree() || c.warnCount < 2) { c.slowmo(0.28, 0.45, 0.2); }
+          if (c.warnCount < 2 && P.mode === 'ground') { c.slowmo(0.28, 0.45, 0.2); } // teach the warning once or twice
           c.warnCount++;
         }
       }

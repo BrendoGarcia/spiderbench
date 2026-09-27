@@ -15,8 +15,8 @@
   --sys-green: #47d88a;
   --sys-cut: 14px;
   /* local fonts only (public/assets/ui/fonts/fonts.css); system fallbacks if the files are missing */
-  --sys-head: 'Spidey Condensed', 'Barlow Condensed', 'Roboto Condensed', 'Arial Narrow', 'Liberation Sans Narrow', sans-serif;
-  --sys-body: 'Spidey Sans', 'Manrope', system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --sys-head: 'Spiderbench Condensed', 'Barlow Condensed', 'Roboto Condensed', 'Arial Narrow', 'Liberation Sans Narrow', sans-serif;
+  --sys-body: 'Spiderbench Sans', 'Manrope', system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 #sys-root { position: fixed; inset: 0; z-index: 30; pointer-events: none; color: var(--sys-white); font-family: var(--sys-body);
   -webkit-font-smoothing: antialiased; user-select: none; }

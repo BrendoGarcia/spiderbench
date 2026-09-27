@@ -18,8 +18,12 @@
 // method. When present, it is called every frame after the root transform (object.position = feet, object.quaternion =
 // body orientation incl. bank) has been applied, and the fallback below is skipped.
 // C5: player.setControlOverride(fn) — fn(inputState, dt, player) returns the input state traversal should use
-// (return the same object possibly modified, or null for neutral input). If the returned object has `combat: true`,
-// anim.mode is reported as 'combat' (anim.sub = returned.combatSub || current sub).
+// (return the same object possibly modified, or null for neutral input). If the returned object has `combat: true` and
+// he is on the ground, anim.mode is reported as 'combat' (anim.sub = returned.combatSub || current sub); every other
+// traversal mode (air, swing, wall, zip, perch, landing) keeps its own animation (no fight stance on a wall / in a
+// swing). `combatVel` (Vector3) = the body velocity of a scripted combat move (lunge, dodge, knock-back): the animator
+// (stride, lean) and the chase camera (follow lag, no snap-back) see real motion; `combatCam` = suppress the chase
+// camera's travel recenter (the combat camera frames the fight).
 import * as THREE from 'three';
 import { loadCharacter, POSES, makePose, blendPose, copyPose } from './rig.js';
 import { createWebSystem } from './web.js';
@@ -148,12 +152,14 @@ export async function createPlayer({ scene, world, camera, input, renderer }) {
       let r; try { r = override(I, dt, api); } catch (e) { console.error('[player] control override failed', e); r = I; }
       if (r === null) { NEUTRAL.look = I.look; I = NEUTRAL; } else if (r && r !== I) { combat = r.combat ? r : null; I = r; } else if (r && r.combat) combat = r;
     }
-    if (combat) I.quickPressed = false; // in a fight Q is the combat finisher (game/combat/input.js)
-    if (override) { I.ropePressed = false; if (s.mode === 'rope') trav.ropeFall(); } // a fight knocks him off the tightrope
     cam.applyLook(I);
     const q = trav.update(dt, I);
     lastQ.copy(q);
-    if (combat) { anim.mode = 'combat'; if (combat.combatSub) anim.sub = combat.combatSub; }
+    if (combat && anim.mode === 'ground') {
+      anim.mode = 'combat'; if (combat.combatSub) anim.sub = combat.combatSub;
+      if (combat.combatVel) { anim.velocity.copy(combat.combatVel); anim.velocity.y = 0; anim.speed = Math.hypot(anim.velocity.x, anim.velocity.z); }
+    }
+    const camVel = combat?.combatVel || s.vel;
     for (const e of trav.events) {
       if (e.type === 'land' && e.severity > 0.02) cam.impact(e.severity);
       else if (e.type === 'perch') cam.impact(e.severity * 0.6);
@@ -172,7 +178,7 @@ export async function createPlayer({ scene, world, camera, input, renderer }) {
       else if (e.type === 'ropeAnchor') cam.shake(0.03);
       else if (e.type === 'ropeArrive') cam.impact(0.05);
     }
-    cam.update(dt, { pos: s.pos, vel: s.vel, mode: s.mode, sub: s.sub, modeT: s.modeT, anchor: s.mode === 'swing' ? s.swing.anchor : null,
+    cam.update(dt, { pos: s.pos, vel: camVel, noAuto: !!combat?.combatCam, mode: s.mode, sub: s.sub, modeT: s.modeT, anchor: s.mode === 'swing' ? s.swing.anchor : null,
       swingDir: s.mode === 'swing' ? s.swing.dir : null,
       wallNormal: s.wall.normal, facing: s.facing, dive: s.dive || s.gliding, tension: s.swing.tension, bank: s.swing.bank,
       sling: s.sling.active ? 0.25 + 0.75 * s.sling.tension : 0, walkK: s.mode === 'ground' ? s.walkK || 0 : 0,

@@ -7,7 +7,7 @@ import { badgeImage, badge } from './icons.js';
 
 let PXM = 0.6;              // base-map pixels per metre (lowered automatically if the big canvas fails to allocate)
 const K_UP = 0.3, K_E = 0.07; // oblique extrusion: map-metres of north / east roof shift per metre of height
-const FONT = '"Spidey Condensed", "Barlow Condensed", "Arial Narrow", sans-serif';
+const FONT = '"Spiderbench Condensed", "Barlow Condensed", "Arial Narrow", sans-serif';
 const MAPC = { water0: '#0b2552', water1: '#0a2048', street: '#07122c', road: '#1a2750', avenue: '#223263', pier: '#1e2a4c', block: '#0e1b40', park: '#123f55', tree0: 'rgba(60,150,160,.42)', tree1: 'rgba(90,180,190,.32)', bg: '#0a2048' };
 const CAT = [
   ['tower', 'Research Towers'], ['station', 'Fast Travel'], ['backpack', 'Backpacks'], ['landmark', 'Landmarks'], ['photo', 'Secret Photos'], ['crime', 'Crimes'],

@@ -57,10 +57,10 @@ export function createFlow(ctx, { save }) {
   for (const ev of ['mousedown', 'pointerdown', 'wheel', 'click', 'auxclick']) root?.addEventListener(ev, e => { if (mode !== 'play') e.stopPropagation(); });
 
   // losing pointer lock (browser eats the Esc keydown) while playing -> pause, like console games
-  let hadLock = false, lockLostAt = 0;
+  let hadLock = false, lockLostAt = 0, overlay = false; // overlay: a dev panel freed the cursor (no pause on lock loss)
   document.addEventListener('pointerlockchange', () => {
     const locked = !!document.pointerLockElement;
-    if (!locked && hadLock && mode === 'play') { lockLostAt = performance.now(); emit('flow:lockLost'); }
+    if (!locked && hadLock && mode === 'play' && !overlay) { lockLostAt = performance.now(); emit('flow:lockLost'); }
     hadLock = locked;
   });
 
@@ -69,6 +69,7 @@ export function createFlow(ctx, { save }) {
     get isPlaying() { return mode === 'play'; },
     get lockLostAt() { return lockLostAt; },
     setMode, clearInput,
+    set overlay(v) { overlay = !!v; }, get overlay() { return overlay; },
     setCameraHook(fn) { cameraHook = fn; },
     onKey(fn) { keyHandlers.push(fn); return () => { const i = keyHandlers.indexOf(fn); if (i >= 0) keyHandlers.splice(i, 1); }; },
   };

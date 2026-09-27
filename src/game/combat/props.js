@@ -70,6 +70,17 @@ export function createProps(c) {
         k++;
       }
     },
+    // push a standing body (feet position, radius r) out of the resting props; returns true when it touched one
+    collide(feet, r, move) {
+      let hit = false;
+      for (const pr of list) {
+        if (pr.state !== 'rest' && pr.state !== 'spent') continue;
+        if (feet.y > pr.pos.y + (pr.h || 1) || feet.y + 1.6 < pr.pos.y) continue;
+        const dx = feet.x - pr.pos.x, dz = feet.z - pr.pos.z, d = Math.hypot(dx, dz), m = r + (pr.state === 'spent' ? 0.25 : pr.r || 0.35);
+        if (d < m && d > 1e-4) { move((dx / d) * (m - d), (dz / d) * (m - d)); hit = true; }
+      }
+      return hit;
+    },
     nearest(p, maxD) {
       let best = null, bd = maxD;
       for (const pr of list) { if (pr.state !== 'rest') continue; const d = pr.pos.distanceTo(p); if (d < bd) { bd = d; best = pr; } }

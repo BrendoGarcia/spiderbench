@@ -96,7 +96,7 @@ export class Animator {
     this.clips = new ClipLib(this.skel, rig.allClips || []);
     const N = this.skel.N;
     this.pool = []; this.P = {};
-    for (const k of ['a', 'b', 'c', 'd', 'e', 'idle', 'loco', 'tmp', 'mir', 'out', 'prev']) this.P[k] = new Pose(N);
+    for (const k of ['a', 'b', 'c', 'd', 'e', 'idle', 'loco', 'tmp', 'mir', 'out', 'prev', 'fi']) this.P[k] = new Pose(N);
     this.P.out.copy(this.skel.rest); this.P.prev.copy(this.skel.rest);
     this.layers = [];
     // continuous state
@@ -2251,10 +2251,18 @@ function makeNodes(S) {
           }
         }
         const v = D.vp;
-        const combat = A.mode === 'combat' && C.has('fightIdle');
-        const idleName = combat ? 'fightIdle' : C.first('idle');
+        // fight-ready stance near enemies: the guard idle cross-fades in / out (~0.35 s), never a pose swap
+        D.cw = damp(D.cw ?? 0, A.mode === 'combat' && C.has('fightIdle') ? 1 : 0, 6, S.dt);
+        const combat = D.cw > 0.5;
+        const idleName = C.first('idle');
         const wl = smooth((v - 0.15) / 1.1);
-        if (wl < 0.999) { if (!C.sample(idleName, S.idleT, S.P.idle)) S.fallback('idle', S.idleT, S.P.idle); }
+        if (wl < 0.999) {
+          if (D.cw < 0.999 && !C.sample(idleName, S.idleT, S.P.idle)) S.fallback('idle', S.idleT, S.P.idle);
+          if (D.cw > 0.001) {
+            if (D.cw >= 0.999) C.sample('fightIdle', S.idleT, S.P.idle);
+            else { C.sample('fightIdle', S.idleT, S.P.fi); blendPoses(S.P.idle, S.P.fi, smooth(D.cw), S.P.idle); }
+          }
+        }
         else S.idleT = 0;
         // walk start: leave idle from the passing pose (one foot swings through first), not a random phase
         if (wl > 0.001 && (D.wlPrev ?? 0) <= 0.001 && wm && vr >= v - 1e-3 && !D.stop) S.locoPhase = wm.pass;
@@ -2270,7 +2278,7 @@ function makeNodes(S) {
           L.data.clip = S.locoInfo.clipA ? `${S.locoInfo.clipA}>${S.locoInfo.clipB}@${S.locoInfo.w.toFixed(2)} r${S.locoInfo.rate.toFixed(2)} k${S.locoInfo.k.toFixed(2)}` : 'gait';
           if (wl < 0.999) blendPoses(S.P.idle, S.P.loco, wl, out); else out.copy(S.P.loco);
         } else { out.copy(S.P.idle); L.data.clip = idleName; }
-        if (wl < 0.999 && !combat) S.widenStance(out, 1 - wl);
+        if (wl < 0.999 && D.cw < 0.999) S.widenStance(out, (1 - wl) * (1 - smooth(D.cw)));
         L.data.bal = damp(L.data.bal || 0, A.balance ? 1 : 0, 6, S.dt);
         if (L.data.bal > 0.01) { S.balance(out, smooth(L.data.bal)); L.data.clip += ' +balance'; }
       },
