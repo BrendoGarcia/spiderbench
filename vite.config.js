@@ -1,14 +1,7 @@
 export default {
-  base: '/spider/',
-
+  base: '/spiderbench/',
   build: {
     target: 'esnext',
-    chunkSizeWarningLimit: 2500,
-
-    rollupOptions: {
-      output: {
-        // transformação dos arquivos gerados
-      }
-    }
+    chunkSizeWarningLimit: 2500
   }
-}
+};
