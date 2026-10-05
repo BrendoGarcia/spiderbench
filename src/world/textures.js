@@ -8,13 +8,17 @@ const BASE = `${import.meta.env.BASE_URL}assets/city/tex/`;
 // Retries with back-off: under load Chromium can refuse a request (net::ERR_INSUFFICIENT_RESOURCES), which must not
 // abort the whole city build.
 export function loadImageRetry(src, tries = 5) {
+  // Normalize root-relative public assets for GitHub Pages deployments under /spiderbench/.
+  const resolvedSrc = src.startsWith('/assets/')
+    ? `${import.meta.env.BASE_URL}${src.slice(1)}`
+    : src;
   return new Promise((res, rej) => {
     let n = 0;
     const attempt = () => {
       const im = new Image();
       im.onload = () => res(im);
-      im.onerror = () => (++n < tries ? setTimeout(attempt, 250 * 2 ** n) : rej(new Error('texture failed to load: ' + src)));
-      im.src = src;
+      im.onerror = () => (++n < tries ? setTimeout(attempt, 250 * 2 ** n) : rej(new Error('texture failed to load: ' + resolvedSrc)));
+      im.src = resolvedSrc;
     };
     attempt();
   });
