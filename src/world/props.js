@@ -646,7 +646,13 @@ function autoLod(geo, n = 2) {
 async function loadPropModels() {
   try {
     const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
-    const gltf = await new GLTFLoader().loadAsync('/assets/city/props.glb');
+    // Normalize absolute asset URIs embedded in the GLB for GitHub Pages subpaths.
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier((url) => {
+      if (url.startsWith('/assets/')) return `${import.meta.env.BASE_URL}${url.slice(1)}`;
+      return url;
+    });
+    const gltf = await new GLTFLoader(manager).loadAsync(`${import.meta.env.BASE_URL}assets/city/props.glb`);
     const geos = {};
     gltf.scene.traverse((o) => {
       if (!o.isMesh) return;
