@@ -649,7 +649,10 @@ async function loadPropModels() {
     // Normalize absolute asset URIs embedded in the GLB for GitHub Pages subpaths.
     const manager = new THREE.LoadingManager();
     manager.setURLModifier((url) => {
+      // GLB resources may be absolute (/assets/...) or relative (assets/...).
+      // Force both forms through Vite's GitHub Pages base path.
       if (url.startsWith('/assets/')) return `${import.meta.env.BASE_URL}${url.slice(1)}`;
+      if (url.startsWith('assets/')) return `${import.meta.env.BASE_URL}${url}`;
       return url;
     });
     const gltf = await new GLTFLoader(manager).loadAsync(`${import.meta.env.BASE_URL}assets/city/props.glb`);
