@@ -2,7 +2,8 @@
 // Colour maps are sRGB, every data map (normal/roughness, height/AO/weathering, noise) is linear; max anisotropy.
 import * as THREE from 'three';
 
-const BASE = '/assets/city/tex/';
+// Resolve public assets through Vite so GitHub Pages subpaths (e.g. /spiderbench/) work.
+const BASE = `${import.meta.env.BASE_URL}assets/city/tex/`;
 
 // Retries with back-off: under load Chromium can refuse a request (net::ERR_INSUFFICIENT_RESOURCES), which must not
 // abort the whole city build.
