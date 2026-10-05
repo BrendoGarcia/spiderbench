@@ -1,4 +1,4 @@
-# Spiderbench — a browser web-swinging game written by Claude
+# Spiderbench — a browser web-swinging game written by Claude  Bg
 
 A non-commercial fan project and benchmark. It shows the kind of code and assets that **Claude** (Anthropic's AI model, working through Claude Code) can produce for a real-time 3D game running in the browser.
 
